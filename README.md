@@ -19,6 +19,11 @@ replace the VM disk.
   host-managed update is available. The Mac launcher and its saved boot kit are
   outside this in-guest update path.
 
+On its first run, the runtime update removes the old Omarchy package repository
+from both pacman configuration files and ensures `hyprland-guiutils` stays
+held with the compatible Hyprland ABI set. It keeps other configured Arch
+repositories and existing package holds.
+
 The updater skips Omarchy settings migrations, user hooks, AUR package updates,
 mise toolchain updates, and automatic orphan removal. It does not write to
 `/home`. The update stops before the Arch package transaction if JoyfulOak's
