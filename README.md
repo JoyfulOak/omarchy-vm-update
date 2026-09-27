@@ -44,11 +44,12 @@ compatibility packages remain held for separate host-managed updates.
    filename. GitHub must expose its SHA-256 digest in the Releases API.
 6. Test `omarchy update` in a disposable VM before relying on the release.
 
-The current policy update package targets Omarchy `v4.0.4` and uses package
-version `4.0.4-4`. It includes the updater and points guests at this repository.
-VMs already running `4.0.4-3` can run `omarchy update` after the matching
-GitHub release is published. A VM that has not installed the bootstrap runtime
-must first install this package manually:
+The current policy and edition update package targets Omarchy `v4.0.4` and uses
+package version `4.0.4-5`. Its `omarchy-version` output includes the
+`JoyfulOak Edition` label. VMs already running `4.0.4-3` or `4.0.4-4` can run
+`omarchy update` now that the matching GitHub release asset is published. A VM that
+has not installed the bootstrap runtime must first install this package
+manually:
 
 ```sh
 sudo pacman -U ~/Downloads/omarchy-runtime-update.pkg.tar.zst
