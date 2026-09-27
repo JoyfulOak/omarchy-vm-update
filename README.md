@@ -41,12 +41,12 @@ host-managed updates.
 6. Test `omarchy update` in a disposable VM before relying on the release.
 
 The initial bootstrap package in this checkout is built for Omarchy `v4.0.4`
-and has package version `4.0.4-2`. It includes the updater and points guests at
+and has package version `4.0.4-3`. It includes the updater and points guests at
 this repository. Existing VMs must install this bootstrap package once before
 they can use this release channel. For a VM that already has Omarchy 4.0.4,
 copy the package from the Mac share into the guest and run
 `sudo pacman -U ~/Downloads/omarchy-runtime-update.pkg.tar.zst`. Then run
-`omarchy update` inside the guest. Once the runtime is at least `4.0.4-2`,
+`omarchy update` inside the guest. Once the runtime is at least `4.0.4-3`,
 future stable Omarchy releases are checked and installed from their matching
 tags here.
 
