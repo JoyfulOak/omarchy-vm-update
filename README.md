@@ -1,67 +1,138 @@
 # Omarchy VM Update Channel
 
-This repository is the release channel for the JoyfulOak Omarchy VM guest
-runtime. Inside the VM, `omarchy update` checks this repository for the latest
-stable release and applies its runtime package in place. It does not rebuild or
-replace the VM disk.
+This repository is the JoyfulOak release channel for an in-place Omarchy VM
+runtime update. `omarchy update` downloads a verified runtime package and then
+updates eligible Arch Linux ARM packages in the existing guest. It does not
+rebuild the VM image, replace the VM disk, or copy over `/home`.
 
-## Update sources
+## Release selection and source pinning
 
-- **JoyfulOak Omarchy runtime:** this repository's stable GitHub Releases. The
-  release tag follows the Omarchy version, for example `v4.0.4`. The guest does
-  not query Basecamp Omarchy's release API or package servers.
-- **Arch operating system packages:** Arch Linux ARM repositories configured
-  in the guest. A full Arch upgrade is required to keep package dependencies
-  consistent. Repository-installed applications may be upgraded along with OS
-  packages; their files in the user's home directory and their settings are
-  preserved.
-- **VM kernel and graphics ABI holds:** remain pinned until a coordinated
-  host-managed update is available. The Mac launcher and its saved boot kit are
-  outside this in-guest update path.
+The official upstream repository is [`omacom/omarchy`](https://github.com/omacom/omarchy).
+The updater asks GitHub for `/repos/omacom/omarchy/releases/latest` and accepts
+only a published, non-prerelease release whose tag is exactly `vX.Y.Z`. It then
+requires a JoyfulOak release with the same tag. Version comparisons use Arch's
+`vercmp` for package versions and numeric tuples for Omarchy release versions;
+a downgrade or malformed version is rejected.
 
-On its first run, the runtime update removes the old Omarchy package repository
-from both pacman configuration files and ensures `hyprland-guiutils` stays
-held with the compatible Hyprland ABI set. It keeps other configured Arch
-repositories and existing package holds.
+The adapted runtime is built from the official release tag/commit, not from an
+un-pinned branch. The current adapted release is Omarchy `v4.0.4`, commit
+`c668141e9c42b13c80c9ca4ea108e11708c5e8a5`. Its source tree and VM-specific
+inputs are recorded in `/usr/share/try-omarchy/build-spec.json` in the package.
+The build specification records the source tree hash, package-lock inputs,
+ARM64 package pins, and every compatibility backport with its reference,
+preimage/postimage hashes, and patch hash. The channel repository contains the
+finished runtime package; source adaptation and package construction occur in
+the Omarchy VM build project referenced by the build specification.
 
-The updater skips Omarchy settings migrations, user hooks, AUR package updates,
-mise toolchain updates, and automatic orphan removal. It does not write to
-`/home`. The update stops before the Arch package transaction if JoyfulOak's
-release metadata or runtime package cannot be verified.
+VM-specific adaptations are deliberately limited to guest update delivery,
+ARM64/VM integration, and compatibility pins. The package retains the required
+boot/runtime integration, including the native cursor bridge. Upstream behavior
+omitted from this in-place path is settings migration, user hooks, AUR updates,
+mise/toolchain updates, orphan removal, and package-cache pruning. Those steps
+are not required to preserve this VM's user state and are not run by this
+channel's `omarchy update`.
 
-## Release assets and checks
+## JoyfulOak release contract
 
-Every stable release must contain exactly these two assets:
+Each published stable release must use the matching upstream tag, for example
+`v4.0.4`, and contain exactly these assets:
 
-1. `omarchy-vm-update.json`, generated from the runtime package. It declares
-   the Omarchy version, package name and version, architecture, and payload
-   filename.
-2. `omarchy-runtime-update.pkg.tar.zst`, the `try-omarchy-runtime` package.
+- `omarchy-vm-update.json`
+- `omarchy-runtime-update.pkg.tar.zst`
 
-The guest gets the SHA-256 digest and size of each asset from GitHub's Releases
-API, downloads the manifest first, and downloads the package only when its
-version is newer than the installed version. Before installation it verifies
-the manifest digest, package digest, tag/version match, package identity, and
-ARM64 compatibility.
+The manifest is JSON with `schemaVersion: 1`, `omarchyVersion`,
+`packageName: "try-omarchy-runtime"`, `packageVersion` (`X.Y.Z-N`),
+`architecture` (`any` or `aarch64`), and `runtimeAsset`. GitHub's Releases API
+must expose a `sha256:<64 lowercase hex>` digest and positive size for both
+assets. The guest validates release state, tag, asset names, URLs, sizes,
+digests, manifest contents, package identity, package version, and ARM64
+compatibility before `pacman -U`.
 
-## Publishing
+The manifest is downloaded and checked first. A malformed manifest, missing
+asset, unsupported architecture, redirect to an untrusted host, checksum
+mismatch, package inspection failure, or package-install failure aborts the
+update before the Arch package transaction. A matching current release is a
+safe no-op after the manifest has been verified. Temporary downloads are
+removed automatically.
 
-From the Omarchy VM project checkout:
+## What changes and what is preserved
 
-1. Update the pinned Omarchy source, reviewed compatibility backports, and
-   package lock for the release being adopted.
-2. Set `guest/spec.json`'s Omarchy release and runtime package release number.
-   The package version must be `X.Y.Z-N` for release tag `vX.Y.Z`.
-3. Run `make guest-runtime-update`. This builds the runtime package and
-   matching manifest without rebuilding the factory VM image.
-4. Test the package and `omarchy update` in a disposable VM.
-5. Create or update the stable release in this repository using the matching
-   Omarchy version tag, such as `v4.0.5`. Upload both generated assets with
-   their exact filenames. GitHub must expose SHA-256 digests for them.
-6. Confirm the release is published, not a draft or prerelease.
+The runtime package updates `/usr/share/omarchy`, the guest-owned update
+helpers, and other package-owned runtime paths. The subsequent Arch transaction
+uses the guest's configured Arch Linux ARM repositories and existing package
+policy. It does not remove packages, update AUR packages, run migrations or
+hooks, update mise toolchains, remove orphans, or prune caches.
 
-The current release targets Omarchy `v4.0.4`, package version `4.0.4-6`, and
-prints `JoyfulOak Edition` in the guest's `omarchy-version` output. Existing
-VMs with runtime `4.0.4-5` need to install this package once to switch to
-JoyfulOak-owned release discovery. After that bootstrap, subsequent runtime
-updates are delivered by `omarchy update`.
+`/home`, personal documents, user configuration, application profiles, and
+installed applications are not copied or deleted by the updater. Arch packages
+already installed may receive normal repository upgrades, so application
+binaries managed by pacman can change while their home-directory data remains.
+The VM's host-managed direct-boot kernel and graphics ABI packages remain held
+until a coordinated host update; the build specification records the pinned
+`aquamarine`, `hyprtoolkit`, and Hyprland compatibility set. The exact holds
+and repository policy are in the guest's `pacman.aarch64.conf` and package
+inputs used by the build, not inferred from the release tag.
+
+## Build, install, and publish
+
+From the Omarchy VM build-project checkout:
+
+```sh
+# Update the pinned upstream tag/commit, reviewed VM patches, and package locks.
+# Then build only the guest runtime package and manifest:
+make guest-runtime-update
+```
+
+Review the generated package, manifest, source revision, patch hashes, package
+locks, and ARM64 holds. Test the package in a disposable VM before publishing.
+Do not rebuild the factory image for this channel update.
+
+With GitHub CLI authentication available, publish a stable release and verify
+it is not a draft or prerelease:
+
+```sh
+gh release create vX.Y.Z \
+  dist/guest/omarchy-runtime-update.pkg.tar.zst \
+  dist/guest/omarchy-vm-update.json \
+  --title "Omarchy VM runtime vX.Y.Z" \
+  --notes-file RELEASE_NOTES.md
+
+gh release view vX.Y.Z --repo JoyfulOak/omarchy-vm-update
+```
+
+Use the exact two asset filenames. Publishing credentials are not required to
+build or test locally; if unavailable, leave the generated artifacts prepared
+for an authorized publisher and do not claim publication.
+
+For an already bootstrapped guest, run:
+
+```sh
+omarchy update
+```
+
+The command logs to `/tmp/omarchy-update.log` and uses the normal Omarchy update
+lock and free-space check. `-y` enables unattended confirmation. A runtime
+verification failure stops before the Arch package transaction; a pacman
+failure leaves its error in the log and must be diagnosed before retrying.
+
+## Recovery and inspection
+
+```sh
+less /tmp/omarchy-update.log
+pacman -Q try-omarchy-runtime
+omarchy debug
+pacman -Q aquamarine hyprland hyprtoolkit linux-aarch64 linux-aarch64-headers
+pacman -Qu
+```
+
+Retry only after correcting the reported release, manifest, network, checksum,
+package, repository, or disk-space problem. Do not bypass verification with an
+untrusted package or force-install a held graphics/kernel package. A failed
+runtime download is safe to retry because it is staged in a temporary directory and no `/home` content is modified.
+
+## Current channel state
+
+The repository's verified published release is Omarchy `v4.0.4`; the checked-in
+manifest identifies runtime package `try-omarchy-runtime` version `4.0.4-6`.
+The local untracked `omarchy-vm-update.json`, if present, is preserved as a
+working-tree change and is not part of the source edits made by this update.

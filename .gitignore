@@ -1,1 +1,3 @@
 /omarchy-runtime-update.pkg.tar.zst
+__pycache__/
+*.py[cod]

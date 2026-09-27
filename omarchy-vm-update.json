@@ -1,0 +1,8 @@
+{
+  "architecture": "any",
+  "omarchyVersion": "4.0.4",
+  "packageName": "try-omarchy-runtime",
+  "packageVersion": "4.0.4-6",
+  "runtimeAsset": "omarchy-runtime-update.pkg.tar.zst",
+  "schemaVersion": 1
+}

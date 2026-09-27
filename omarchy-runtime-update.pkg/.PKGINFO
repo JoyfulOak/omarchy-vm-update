@@ -1,7 +1,7 @@
 pkgname = try-omarchy-runtime
 pkgbase = try-omarchy-runtime
-pkgver = 4.0.4-2
-pkgdesc = Pinned Basecamp Omarchy runtime c668141e9c42b13c80c9ca4ea108e11708c5e8a5 for the Try Omarchy guest
+pkgver = 4.0.4-6
+pkgdesc = Pinned Omarchy runtime c668141e9c42b13c80c9ca4ea108e11708c5e8a5 adapted for the JoyfulOak Try Omarchy guest
 url = https://github.com/basecamp/omarchy
 builddate = 1789450452
 packager = Try Omarchy reproducible guest builder

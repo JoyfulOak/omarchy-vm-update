@@ -13,10 +13,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import cast
 
 
 SPEC = Path("/usr/share/try-omarchy/build-spec.json")
 ASSET_NAME = "omarchy-runtime-update.pkg.tar.zst"
+MANIFEST_ASSET_NAME = "omarchy-vm-update.json"
 MAX_ASSET_BYTES = 128 * 1024 * 1024
 USER_AGENT = "Omarchy-VM-Update"
 VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -85,7 +87,7 @@ def latest_upstream_release(upstream_repo: str) -> tuple[str, tuple[int, int, in
     return tag if tag.startswith("v") else f"v{tag}", version
 
 
-def matching_runtime_release(update_repo: str, tag: str) -> tuple[dict, dict, str]:
+def matching_runtime_release(update_repo: str, tag: str) -> tuple[dict, dict, dict]:
     encoded_tag = urllib.parse.quote(tag, safe="")
     release = read_json(
         f"https://api.github.com/repos/{update_repo}/releases/tags/{encoded_tag}"
@@ -98,29 +100,34 @@ def matching_runtime_release(update_repo: str, tag: str) -> tuple[dict, dict, st
     if html_url.scheme != "https" or html_url.hostname != "github.com":
         fail("GitHub runtime release URL is invalid")
 
-    assets = release.get("assets")
-    if not isinstance(assets, list):
+    raw_assets = release.get("assets")
+    if not isinstance(raw_assets, list) or not all(isinstance(asset, dict) for asset in raw_assets):
         fail(f"runtime release {tag} has no asset list")
-    matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == ASSET_NAME]
-    if len(matches) != 1:
-        fail(f"runtime release {tag} must contain exactly one {ASSET_NAME} asset")
-    asset = matches[0]
-    digest = asset.get("digest")
-    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-        fail("GitHub did not provide a SHA-256 digest for the runtime package")
-    size = asset.get("size")
-    if not isinstance(size, int) or size <= 0 or size > MAX_ASSET_BYTES:
-        fail("GitHub runtime package size is invalid or exceeds the safety limit")
-    download_url = asset.get("browser_download_url", "")
-    parsed_asset_url = urllib.parse.urlparse(download_url)
-    expected_path = f"/{update_repo}/releases/download/{tag}/{ASSET_NAME}"
-    if (
-        parsed_asset_url.scheme != "https"
-        or parsed_asset_url.hostname != "github.com"
-        or parsed_asset_url.path != expected_path
-    ):
-        fail("GitHub runtime package URL does not match the configured release")
-    return release, asset, digest.removeprefix("sha256:")
+    asset_dicts = cast(list[dict], raw_assets)
+    names = [asset.get("name") for asset in asset_dicts]
+    if sorted(names) != sorted([MANIFEST_ASSET_NAME, ASSET_NAME]):
+        fail(f"runtime release {tag} must contain exactly the manifest and runtime package assets")
+
+    result = {}
+    for name in (MANIFEST_ASSET_NAME, ASSET_NAME):
+        asset = next(asset for asset in asset_dicts if asset.get("name") == name)
+        digest = asset.get("digest")
+        if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            fail(f"GitHub did not provide a SHA-256 digest for {name}")
+        size = asset.get("size")
+        if not isinstance(size, int) or size <= 0 or size > MAX_ASSET_BYTES:
+            fail(f"GitHub asset {name} size is invalid or exceeds the safety limit")
+        download_url = asset.get("browser_download_url", "")
+        parsed_asset_url = urllib.parse.urlparse(download_url)
+        expected_path = f"/{update_repo}/releases/download/{tag}/{name}"
+        if (
+            parsed_asset_url.scheme != "https"
+            or parsed_asset_url.hostname != "github.com"
+            or parsed_asset_url.path != expected_path
+        ):
+            fail(f"GitHub asset URL for {name} does not match the configured release")
+        result[name] = asset
+    return release, result[MANIFEST_ASSET_NAME], result[ASSET_NAME]
 
 
 def installed_package_version() -> str:
@@ -186,7 +193,7 @@ def download(url: str, expected_size: int, expected_sha256: str, path: Path) -> 
         fail("downloaded runtime package SHA-256 does not match GitHub release metadata")
 
 
-def package_identity(path: Path, expected_tag: str) -> str:
+def package_identity(path: Path, expected_tag: str, expected_version: str) -> str:
     try:
         result = subprocess.run(
             ["pacman", "-Qip", "--color", "never", str(path)],
@@ -210,11 +217,29 @@ def package_identity(path: Path, expected_tag: str) -> str:
     tag_version = expected_tag.removeprefix("v")
     if name != "try-omarchy-runtime" or not PACKAGE_VERSION_RE.fullmatch(version):
         fail("GitHub asset is not a valid try-omarchy-runtime package")
-    if not version.startswith(tag_version + "-"):
-        fail(f"runtime package version {version} does not match Omarchy release {expected_tag}")
+    if version != expected_version or not version.startswith(tag_version + "-"):
+        fail(f"runtime package version {version} does not match manifest {expected_version} and Omarchy release {expected_tag}")
     if architecture not in {"any", "aarch64"} or platform.machine() not in {"aarch64", "arm64"}:
         fail("GitHub runtime package is not compatible with this ARM64 guest")
     return version
+
+
+def validate_manifest(metadata: object, expected_tag: str) -> str:
+    if not isinstance(metadata, dict):
+        fail("runtime manifest is not a JSON object")
+    metadata = cast(dict, metadata)
+    expected_version = metadata.get("packageVersion")
+    if (
+        metadata.get("schemaVersion") != 1
+        or metadata.get("omarchyVersion") != expected_tag.removeprefix("v")
+        or metadata.get("packageName") != "try-omarchy-runtime"
+        or metadata.get("architecture") not in {"any", "aarch64"}
+        or metadata.get("runtimeAsset") != ASSET_NAME
+        or not isinstance(expected_version, str)
+        or not PACKAGE_VERSION_RE.fullmatch(expected_version)
+    ):
+        fail("runtime manifest does not match the official Omarchy release and package contract")
+    return cast(str, expected_version)
 
 
 def install_package(path: Path) -> None:
@@ -235,18 +260,37 @@ def main() -> None:
             f"{current_package_version}"
         )
     same_release_as_installed = upstream_version == current_upstream_version
-    if same_release_as_installed and compare_package_versions(
-        current_package_version, bootstrap_version
-    ) >= 0:
-        print(f"Omarchy VM runtime is current ({current_package_version}, Omarchy {tag}).")
-        return
-
-    _release, asset, digest = matching_runtime_release(update_repo, tag)
+    _release, manifest_asset, package_asset = matching_runtime_release(update_repo, tag)
     print(f"Update Omarchy VM runtime for Omarchy {tag} from {update_repo}…")
     with tempfile.TemporaryDirectory(prefix="omarchy-vm-update-") as temporary:
+        manifest = Path(temporary) / MANIFEST_ASSET_NAME
         package = Path(temporary) / ASSET_NAME
-        download(asset["browser_download_url"], asset["size"], digest, package)
-        actual_version = package_identity(package, tag)
+        download(
+            manifest_asset["browser_download_url"],
+            manifest_asset["size"],
+            manifest_asset["digest"].removeprefix("sha256:"),
+            manifest,
+        )
+        metadata: dict = {}
+        try:
+            metadata = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            fail(f"runtime manifest is malformed: {error}")
+        expected_version = validate_manifest(metadata, tag)
+        if same_release_as_installed and compare_package_versions(
+            current_package_version, expected_version
+        ) >= 0:
+            print(f"Omarchy VM runtime is current ({current_package_version}, Omarchy {tag}).")
+            return
+        if same_release_as_installed and compare_package_versions(expected_version, bootstrap_version) < 0:
+            fail(f"bootstrap runtime package must be at least {bootstrap_version}")
+        download(
+            package_asset["browser_download_url"],
+            package_asset["size"],
+            package_asset["digest"].removeprefix("sha256:"),
+            package,
+        )
+        actual_version = package_identity(package, tag, expected_version)
         version_order = compare_package_versions(actual_version, current_package_version)
         if version_order <= 0:
             if same_release_as_installed:
@@ -258,10 +302,6 @@ def main() -> None:
                 f"runtime package {actual_version} is not newer than installed "
                 f"package {current_package_version}"
             )
-        if same_release_as_installed and compare_package_versions(
-            actual_version, bootstrap_version
-        ) < 0:
-            fail(f"bootstrap runtime package must be at least {bootstrap_version}")
         install_package(package)
     print(f"Omarchy VM runtime updated to {actual_version}.")
 

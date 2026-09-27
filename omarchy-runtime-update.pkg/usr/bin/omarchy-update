@@ -28,7 +28,6 @@ omarchy-update-requires-free-space
 if [[ ${1:-} == "-y" ]] || omarchy-update-confirm; then
   # Before the snapshot: the cache is on the snapshotted subvolume, so pruning
   # after it frees nothing until that snapshot ages out.
-  omarchy-update-pkg-prune
 
   # 127 means Snapper is deliberately absent. Any other failure already said
   # what went wrong, and a missing snapshot is not worth blocking an update
@@ -39,24 +38,17 @@ if [[ ${1:-} == "-y" ]] || omarchy-update-confirm; then
   # Refresh Try Omarchy's guest-owned integration from this project's latest
   # verified GitHub release after Omarchy's normal snapshot attempt.
   if [[ ${TRY_OMARCHY_SKIP_GITHUB_UPDATE:-0} != 1 ]]; then
-    python3 /usr/local/lib/try-omarchy/update-from-github.py ||
-      echo -e "\e[33mTry Omarchy GitHub update unavailable; continuing with Arch updates.\e[0m" >&2
+    python3 /usr/local/lib/try-omarchy/update-from-github.py
   fi
 
   omarchy-update-stay-awake start
 
-  omarchy-update-dev
   omarchy-update-keyring
 
-  # Migrations ship with the packages installed here and are written against
-  # them, so everything below waits on this finishing. An upgrade that stopped
-  # takes the update with it rather than migrating against what is still on disk.
+  # Update the Arch package set only after the JoyfulOak runtime has been
+  # verified and installed. Migrations and user hooks are intentionally not
+  # part of this in-place channel update.
   omarchy-update-system-pkgs
-  omarchy-migrate
-  omarchy-hook post-update
-  omarchy-update-aur-pkgs
-  omarchy-update-mise
-  omarchy-update-orphan-pkgs
 
   omarchy-update-analyze-logs
   omarchy-update-status
