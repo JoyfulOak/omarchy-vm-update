@@ -16,14 +16,18 @@ matching release must contain exactly one asset named
 Before installation, the guest checks GitHub's SHA-256 asset digest, package
 identity, architecture, Omarchy version, and Arch package version ordering. A
 runtime package for a lower or mismatched Omarchy version is rejected. If the
-matching release or asset is not ready, the guest warns and continues with the
-ordinary Arch update. Publish this release only after the package has been
+matching release or asset cannot be verified, the update stops before the Arch
+package transaction. Publish this release only after the package has been
 built and checked against that Omarchy release.
 
-The runtime package is installed first. The rest of `omarchy update` then runs
-Omarchy migrations and updates eligible Arch packages. The VM's direct-boot
-kernel and graphics ABI compatibility packages remain held for separate
-host-managed updates.
+The runtime package is installed first. `omarchy update` then refreshes
+signing keys and updates eligible packages from the configured Arch Linux ARM
+repositories. It does not run Omarchy settings migrations or user hooks, update
+AUR packages or mise toolchains, or remove orphan packages. It leaves `/home`
+untouched. Pacman still upgrades installed packages from Arch repositories,
+including personal applications installed through pacman; Arch does not support
+a safe partial system upgrade. The VM's direct-boot kernel and graphics ABI
+compatibility packages remain held for separate host-managed updates.
 
 ## Publishing a runtime update
 
@@ -40,19 +44,22 @@ host-managed updates.
    filename. GitHub must expose its SHA-256 digest in the Releases API.
 6. Test `omarchy update` in a disposable VM before relying on the release.
 
-The initial bootstrap package in this checkout is built for Omarchy `v4.0.4`
-and has package version `4.0.4-3`. It includes the updater and points guests at
-this repository. Existing VMs must install this bootstrap package once before
-they can use this release channel. For a VM that already has Omarchy 4.0.4,
-copy the package from the Mac share into the guest and run
-`sudo pacman -U ~/Downloads/omarchy-runtime-update.pkg.tar.zst`. Then run
-`omarchy update` inside the guest. Once the runtime is at least `4.0.4-3`,
-future stable Omarchy releases are checked and installed from their matching
+The current policy update package targets Omarchy `v4.0.4` and uses package
+version `4.0.4-4`. It includes the updater and points guests at this repository.
+VMs already running `4.0.4-3` can run `omarchy update` after the matching
+GitHub release is published. A VM that has not installed the bootstrap runtime
+must first install this package manually:
+
+```sh
+sudo pacman -U ~/Downloads/omarchy-runtime-update.pkg.tar.zst
+```
+
+Future stable Omarchy releases are checked and installed from their matching
 tags here.
 
-## Current bootstrap asset
+## Current update asset
 
 The ignored local file `omarchy-runtime-update.pkg.tar.zst` is attached to the
 draft `v4.0.4` GitHub release. It is a release upload asset, not a source file
-to commit into Git history. Publish the draft after reviewing the bootstrap
-steps above; guests can download its asset only after publication.
+to commit into Git history. Publish the draft after reviewing the update
+behavior above; guests can download its asset only after publication.
