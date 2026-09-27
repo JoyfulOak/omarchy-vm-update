@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+"""Send Hyprland's hidden pointer warps to QEMU's Cocoa cursor bridge.
+
+Hyprland stops issuing virtio-gpu cursor moves while cursor:invisible is set.
+The compositor's event socket reports focus changes, and its command socket
+provides the resulting pointer position. The wire format is one line per
+position: ``W <x-millionths> <y-millionths>`` within the active output.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import select
+import socket
+import sys
+import time
+
+
+PORT = Path("/dev/virtio-ports/dev.tryomarchy.cursor")
+SCALE = 1_000_000
+MAX_REPLY = 128 * 1024
+FOCUS_EVENTS = (b"activewindowv2>>", b"workspace>>", b"focusedmon>>")
+
+
+def instance_path() -> Path:
+    runtime = Path(os.environ["XDG_RUNTIME_DIR"]) / "hypr"
+    signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if signature:
+        path = runtime / signature
+        if (path / ".socket.sock").is_socket() and (path / ".socket2.sock").is_socket():
+            return path
+    candidates = [
+        path for path in runtime.iterdir()
+        if path.is_dir() and (path / ".socket.sock").is_socket()
+        and (path / ".socket2.sock").is_socket()
+    ]
+    if len(candidates) != 1:
+        raise RuntimeError("expected one active Hyprland IPC instance")
+    return candidates[0]
+
+
+def query(path: Path, request: bytes) -> object:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(1)
+        connection.connect(str(path / ".socket.sock"))
+        connection.sendall(request)
+        chunks = []
+        total = 0
+        while chunk := connection.recv(4096):
+            total += len(chunk)
+            if total > MAX_REPLY:
+                raise ValueError("Hyprland IPC reply is too large")
+            chunks.append(chunk)
+    return json.loads(b"".join(chunks))
+
+
+def normalized_position(cursor: object, monitors: object) -> tuple[int, int] | None:
+    if not isinstance(cursor, dict) or not isinstance(monitors, list):
+        return None
+    x, y = cursor.get("x"), cursor.get("y")
+    if type(x) not in (int, float) or type(y) not in (int, float):
+        return None
+    for monitor in monitors:
+        if not isinstance(monitor, dict):
+            continue
+        left, top = monitor.get("x"), monitor.get("y")
+        width, height, scale = (monitor.get(key) for key in ("width", "height", "scale"))
+        if any(type(value) not in (int, float) for value in (left, top, width, height, scale)):
+            continue
+        if width <= 0 or height <= 0 or scale <= 0:
+            continue
+        relative_x = (x - left) * scale / width
+        relative_y = (y - top) * scale / height
+        if 0 <= relative_x < 1 and 0 <= relative_y < 1:
+            return int(relative_x * SCALE), int(relative_y * SCALE)
+    return None
+
+
+def read_position(path: Path) -> tuple[int, int] | None:
+    return normalized_position(query(path, b"j/cursorpos"), query(path, b"j/monitors"))
+
+
+def event_needs_position(line: bytes) -> bool:
+    return line.startswith(FOCUS_EVENTS)
+
+
+def run() -> None:
+    path = instance_path()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as events:
+        events.connect(str(path / ".socket2.sock"))
+        descriptor = os.open(PORT, os.O_WRONLY | os.O_CLOEXEC)
+        try:
+            pending = bytearray()
+            deadlines: list[tuple[float, bool]] = [(time.monotonic() + 0.1, True)]
+            last_sent: tuple[int, int] | None = None
+            while True:
+                now = time.monotonic()
+                if deadlines and deadlines[0][0] <= now:
+                    _, force = deadlines.pop(0)
+                    position = read_position(path)
+                    if position is not None and (force or position != last_sent):
+                        os.write(descriptor, f"W {position[0]} {position[1]}\n".encode("ascii"))
+                        last_sent = position
+                    continue
+                timeout = max(0, deadlines[0][0] - now) if deadlines else None
+                ready, _, _ = select.select([events], [], [], timeout)
+                if not ready:
+                    continue
+                chunk = events.recv(4096)
+                if not chunk:
+                    raise RuntimeError("Hyprland event socket closed")
+                pending.extend(chunk)
+                if len(pending) > MAX_REPLY:
+                    raise ValueError("Hyprland event line is too large")
+                while b"\n" in pending:
+                    line, _, rest = pending.partition(b"\n")
+                    pending = bytearray(rest)
+                    if event_needs_position(line):
+                        now = time.monotonic()
+                        deadlines = [(now + 0.02, True), (now + 0.08, False)]
+        finally:
+            os.close(descriptor)
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except (OSError, RuntimeError, ValueError, KeyError, json.JSONDecodeError) as error:
+        print(f"omarchy-native-cursor-bridge: {error}", file=sys.stderr, flush=True)
+        sys.exit(1)
