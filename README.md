@@ -52,7 +52,7 @@ tags here.
 
 ## Current bootstrap asset
 
-The ignored local file `omarchy-runtime-update.pkg.tar.zst` is staged for the
-initial `v4.0.4` GitHub release. It is a release upload asset, not a source file
-to commit into Git history. Attach it to the `v4.0.4` release with the exact
-filename above.
+The ignored local file `omarchy-runtime-update.pkg.tar.zst` is attached to the
+draft `v4.0.4` GitHub release. It is a release upload asset, not a source file
+to commit into Git history. Publish the draft after reviewing the bootstrap
+steps above; guests can download its asset only after publication.
